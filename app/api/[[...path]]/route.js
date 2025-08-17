@@ -1,104 +1,314 @@
-import { MongoClient } from 'mongodb'
-import { v4 as uuidv4 } from 'uuid'
-import { NextResponse } from 'next/server'
+import { NextResponse } from 'next/server';
+import { supabase, initializeDatabase } from '../../../lib/supabase.js';
 
-// MongoDB connection
-let client
-let db
-
-async function connectToMongo() {
-  if (!client) {
-    client = new MongoClient(process.env.MONGO_URL)
-    await client.connect()
-    db = client.db(process.env.DB_NAME)
-  }
-  return db
-}
-
-// Helper function to handle CORS
-function handleCORS(response) {
-  response.headers.set('Access-Control-Allow-Origin', process.env.CORS_ORIGINS || '*')
-  response.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
-  response.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization')
-  response.headers.set('Access-Control-Allow-Credentials', 'true')
-  return response
-}
-
-// OPTIONS handler for CORS
-export async function OPTIONS() {
-  return handleCORS(new NextResponse(null, { status: 200 }))
-}
-
-// Route handler function
-async function handleRoute(request, { params }) {
-  const { path = [] } = params
-  const route = `/${path.join('/')}`
-  const method = request.method
-
+export async function GET(request) {
+  const url = new URL(request.url);
+  const path = url.pathname.replace('/api/', '');
+  
   try {
-    const db = await connectToMongo()
-
-    // Root endpoint - GET /api/root (since /api/ is not accessible with catch-all)
-    if (route === '/root' && method === 'GET') {
-      return handleCORS(NextResponse.json({ message: "Hello World" }))
-    }
-    // Root endpoint - GET /api/root (since /api/ is not accessible with catch-all)
-    if (route === '/' && method === 'GET') {
-      return handleCORS(NextResponse.json({ message: "Hello World" }))
-    }
-
-    // Status endpoints - POST /api/status
-    if (route === '/status' && method === 'POST') {
-      const body = await request.json()
-      
-      if (!body.client_name) {
-        return handleCORS(NextResponse.json(
-          { error: "client_name is required" }, 
-          { status: 400 }
-        ))
+    await initializeDatabase();
+    
+    // Auth endpoints
+    if (path === 'auth/user') {
+      const { data: { user }, error } = await supabase.auth.getUser()
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 401 });
       }
-
-      const statusObj = {
-        id: uuidv4(),
-        client_name: body.client_name,
-        timestamp: new Date()
-      }
-
-      await db.collection('status_checks').insertOne(statusObj)
-      return handleCORS(NextResponse.json(statusObj))
+      return NextResponse.json({ user });
     }
-
-    // Status endpoints - GET /api/status
-    if (route === '/status' && method === 'GET') {
-      const statusChecks = await db.collection('status_checks')
-        .find({})
-        .limit(1000)
-        .toArray()
-
-      // Remove MongoDB's _id field from response
-      const cleanedStatusChecks = statusChecks.map(({ _id, ...rest }) => rest)
+    
+    // Get all users (for admin dashboard)
+    if (path === 'users') {
+      const { data, error } = await supabase
+        .from('users')
+        .select('*')
+        .order('created_at', { ascending: false });
       
-      return handleCORS(NextResponse.json(cleanedStatusChecks))
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 500 });
+      }
+      
+      return NextResponse.json(data || []);
     }
-
-    // Route not found
-    return handleCORS(NextResponse.json(
-      { error: `Route ${route} not found` }, 
-      { status: 404 }
-    ))
-
+    
+    // Get user photos with location data
+    if (path === 'photos') {
+      const { data, error } = await supabase
+        .from('photos')
+        .select(`
+          *,
+          users (
+            id,
+            full_name,
+            role
+          )
+        `)
+        .order('created_at', { ascending: false });
+      
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 500 });
+      }
+      
+      return NextResponse.json(data || []);
+    }
+    
+    // Get GPS tracking data
+    if (path === 'gps-tracking') {
+      const { data, error } = await supabase
+        .from('gps_tracking')
+        .select(`
+          *,
+          users (
+            id,
+            full_name,
+            role
+          )
+        `)
+        .order('timestamp', { ascending: false })
+        .limit(100);
+      
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 500 });
+      }
+      
+      return NextResponse.json(data || []);
+    }
+    
+    // Get leads
+    if (path === 'leads') {
+      const { data, error } = await supabase
+        .from('leads')
+        .select(`
+          *,
+          users (
+            id,
+            full_name,
+            role
+          )
+        `)
+        .order('created_at', { ascending: false });
+      
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 500 });
+      }
+      
+      return NextResponse.json(data || []);
+    }
+    
+    return NextResponse.json({ message: 'API endpoint not found' }, { status: 404 });
+    
   } catch (error) {
-    console.error('API Error:', error)
-    return handleCORS(NextResponse.json(
-      { error: "Internal server error" }, 
-      { status: 500 }
-    ))
+    console.error('API Error:', error);
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 
-// Export all HTTP methods
-export const GET = handleRoute
-export const POST = handleRoute
-export const PUT = handleRoute
-export const DELETE = handleRoute
-export const PATCH = handleRoute
+export async function POST(request) {
+  const url = new URL(request.url);
+  const path = url.pathname.replace('/api/', '');
+  
+  try {
+    const body = await request.json();
+    
+    // User authentication
+    if (path === 'auth/login') {
+      const { email, password } = body;
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password
+      });
+      
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 400 });
+      }
+      
+      // Get user profile
+      const { data: userProfile, error: profileError } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', data.user.id)
+        .single();
+      
+      if (profileError) {
+        return NextResponse.json({ error: 'User profile not found' }, { status: 400 });
+      }
+      
+      return NextResponse.json({ 
+        user: data.user, 
+        profile: userProfile,
+        session: data.session 
+      });
+    }
+    
+    // User registration
+    if (path === 'auth/register') {
+      const { email, password, fullName, role = 'agent' } = body;
+      
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password
+      });
+      
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 400 });
+      }
+      
+      // Create user profile
+      const { data: userProfile, error: profileError } = await supabase
+        .from('users')
+        .insert([{
+          id: data.user.id,
+          email: email,
+          full_name: fullName,
+          role: role,
+          created_at: new Date().toISOString()
+        }])
+        .select()
+        .single();
+      
+      if (profileError) {
+        return NextResponse.json({ error: profileError.message }, { status: 500 });
+      }
+      
+      return NextResponse.json({ 
+        user: data.user, 
+        profile: userProfile 
+      });
+    }
+    
+    // Upload photo with location
+    if (path === 'photos') {
+      const { user_id, image_url, latitude, longitude, description } = body;
+      
+      const { data, error } = await supabase
+        .from('photos')
+        .insert([{
+          user_id: user_id,
+          image_url: image_url,
+          latitude: latitude,
+          longitude: longitude,
+          description: description || '',
+          created_at: new Date().toISOString()
+        }])
+        .select(`
+          *,
+          users (
+            id,
+            full_name,
+            role
+          )
+        `)
+        .single();
+      
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 500 });
+      }
+      
+      return NextResponse.json(data);
+    }
+    
+    // Record GPS tracking
+    if (path === 'gps-tracking') {
+      const { user_id, latitude, longitude, activity_type = 'active' } = body;
+      
+      const { data, error } = await supabase
+        .from('gps_tracking')
+        .insert([{
+          user_id: user_id,
+          latitude: latitude,
+          longitude: longitude,
+          activity_type: activity_type,
+          timestamp: new Date().toISOString()
+        }])
+        .select(`
+          *,
+          users (
+            id,
+            full_name,
+            role
+          )
+        `)
+        .single();
+      
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 500 });
+      }
+      
+      return NextResponse.json(data);
+    }
+    
+    // Create lead
+    if (path === 'leads') {
+      const { user_id, contact_name, contact_phone, contact_email, business_name, latitude, longitude, notes } = body;
+      
+      const { data, error } = await supabase
+        .from('leads')
+        .insert([{
+          user_id: user_id,
+          contact_name: contact_name,
+          contact_phone: contact_phone,
+          contact_email: contact_email,
+          business_name: business_name,
+          latitude: latitude,
+          longitude: longitude,
+          notes: notes || '',
+          created_at: new Date().toISOString()
+        }])
+        .select(`
+          *,
+          users (
+            id,
+            full_name,
+            role
+          )
+        `)
+        .single();
+      
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 500 });
+      }
+      
+      return NextResponse.json(data);
+    }
+    
+    return NextResponse.json({ message: 'API endpoint not found' }, { status: 404 });
+    
+  } catch (error) {
+    console.error('API Error:', error);
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+  }
+}
+
+export async function PUT(request) {
+  const url = new URL(request.url);
+  const path = url.pathname.replace('/api/', '');
+  
+  try {
+    const body = await request.json();
+    
+    // Update user role
+    if (path.startsWith('users/') && path.includes('/role')) {
+      const userId = path.split('/')[1];
+      const { role } = body;
+      
+      const { data, error } = await supabase
+        .from('users')
+        .update({ role: role })
+        .eq('id', userId)
+        .select()
+        .single();
+      
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 500 });
+      }
+      
+      return NextResponse.json(data);
+    }
+    
+    return NextResponse.json({ message: 'API endpoint not found' }, { status: 404 });
+    
+  } catch (error) {
+    console.error('API Error:', error);
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+  }
+}
