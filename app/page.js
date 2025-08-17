@@ -111,16 +111,31 @@ export default function FieldManagementApp() {
         body: JSON.stringify(loginData),
       })
 
-      const data = await response.json()
+      // Check if response has content before parsing
+      const text = await response.text()
+      
+      if (!text) {
+        throw new Error('Empty response from server')
+      }
+
+      let data
+      try {
+        data = JSON.parse(text)
+      } catch (jsonError) {
+        console.error('JSON parsing error:', jsonError)
+        console.error('Response text:', text)
+        throw new Error('Invalid response format from server')
+      }
 
       if (response.ok) {
         setUser(data)
         localStorage.setItem('fieldapp_user', JSON.stringify(data))
-        loadDashboardData()
+        await loadDashboardData()
       } else {
-        alert(data.error || 'Login failed')
+        throw new Error(data.error || 'Login failed')
       }
     } catch (error) {
+      console.error('Login error:', error)
       alert('Login failed: ' + error.message)
     } finally {
       setIsLoading(false)
@@ -140,16 +155,32 @@ export default function FieldManagementApp() {
         body: JSON.stringify(registerData),
       })
 
-      const data = await response.json()
+      // Check if response has content before parsing
+      const text = await response.text()
+      
+      if (!text) {
+        throw new Error('Empty response from server')
+      }
+
+      let data
+      try {
+        data = JSON.parse(text)
+      } catch (jsonError) {
+        console.error('JSON parsing error:', jsonError)
+        console.error('Response text:', text)
+        console.error('Response status:', response.status)
+        throw new Error('Invalid response format from server')
+      }
 
       if (response.ok) {
         alert('Registration successful! Please login.')
         setShowLogin(true)
         setRegisterData({ email: '', password: '', fullName: '', role: 'agent' })
       } else {
-        alert(data.error || 'Registration failed')
+        throw new Error(data.error || 'Registration failed')
       }
     } catch (error) {
+      console.error('Registration error:', error)
       alert('Registration failed: ' + error.message)
     } finally {
       setIsLoading(false)
